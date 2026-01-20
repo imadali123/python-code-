@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VulnScanner Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f6f9; }
+        .card { box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: none; }
+        /* Severity Colors */
+        .severity-Low { background-color: #17a2b8; color: #fff; }
+        .severity-Medium { background-color: #ffc107; color: #000; font-weight: bold; }
+        .severity-High { background-color: #dc3545; color: #fff; font-weight: bold; }
+    </style>
+</head>
+<body class="p-4">
+
+<div class="container">
+    <h1 class="mb-4">🛡️ Vulnerability Scanner Dashboard</h1>
+
+    <div class="card p-4 mb-4">
+        <h4> New Scan</h4>
+        <div class="row g-3">
+            <div class="col-md-6">
+                <input type="text" id="targetIp" class="form-control" placeholder="Enter Target IP (e.g. 45.33.32.156)">
+            </div>
+            <div class="col-md-4">
+                <select id="scanType" class="form-select">
+                    <option value="Quick">Quick Scan</option>
+                    <option value="Full">Full Scan (Vuln Hunter)</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button onclick="startScan()" class="btn btn-primary w-100">Start Scan</button>
+            </div>
+        </div>
+        <div id="scanMsg" class="mt-2 text-success fw-bold"></div>
+    </div>
+
+    <div class="card p-4">
+        <h4> Scan Results (Live)</h4>
+        
+        <div class="input-group mb-3">
+            <input type="number" id="scanIdInput" class="form-control" placeholder="Enter Scan ID to view results (e.g. 10)">
+            <button onclick="fetchResults()" class="btn btn-dark">Load Results</button>
+            <button onclick="downloadReport()" class="btn btn-danger">📄 PDF Report</button>
+        </div>
+
+        <div class="alert alert-light border mb-3">
+            <div class="row">
+                <div class="col-md-6">
+                    <strong> Target:</strong> <span id="scanTargetText" class="text-primary">---</span>
+                </div>
+                <div class="col-md-6">
+                    <strong> Status:</strong> <span id="scanStatusText" class="badge bg-secondary">---</span>
+                </div>
+            </div>
+        </div>
+
+        <table class="table table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>Severity</th>
+                    <th>Vulnerability / Port</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody id="resultsTable">
+                <tr><td colspan="3" class="text-center text-muted">Enter a Scan ID above to see findings.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const API_URL = "http://127.0.0.1:8000";
+
+    async function startScan() {
+        const target = document.getElementById("targetIp").value;
+        const type = document.getElementById("scanType").value;
+        const msgDiv = document.getElementById("scanMsg");
+
+        if(!target) {
+            alert("Please enter a valid IP address!");
+            return;
+        }
+
+        try {
+            msgDiv.innerText = "Launching scan...";
+            const response = await fetch(`${API_URL}/scans/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targets: target, scan_type: type })
+            });
+
+            if (!response.ok) throw new Error("Failed to start scan");
+
+            const data = await response.json();
+            msgDiv.innerText = ` Scan Started! ID: ${data.scan_id} (Status: ${data.status})`;
+        } catch (error) {
+            msgDiv.innerText = " Error starting scan. Is the API running?";
+            console.error(error);
+        }
+    }
+
+    async function fetchResults() {
+        const scanId = document.getElementById("scanIdInput").value;
+        const table = document.getElementById("resultsTable");
+        
+        if(!scanId) {
+            alert("Please enter a Scan ID");
+            return;
+        }
+
+        // 1. Get the Scan Details (IP Address & Status)
+        try {
+            const scanResponse = await fetch(`${API_URL}/scans/${scanId}`);
+            if (scanResponse.ok) {
+                const scanData = await scanResponse.json();
+                document.getElementById("scanTargetText").innerText = scanData.targets;
+                
+                const statusSpan = document.getElementById("scanStatusText");
+                statusSpan.innerText = scanData.status;
+                
+                if(scanData.status === "Completed") {
+                    statusSpan.className = "badge bg-success";
+                } else if (scanData.status === "Running") {
+                    statusSpan.className = "badge bg-warning text-dark";
+                } else if (scanData.status === "Failed") {
+                    statusSpan.className = "badge bg-danger";
+                } else {
+                    statusSpan.className = "badge bg-secondary";
+                }
+
+            } else {
+                document.getElementById("scanTargetText").innerText = "Not Found";
+                document.getElementById("scanStatusText").innerText = "Error";
+            }
+        } catch (e) {
+            console.error("Error fetching scan details:", e);
+        }
+
+        // 2. Get the Vulnerabilities (Findings)
+        try {
+            const response = await fetch(`${API_URL}/scans/${scanId}/findings`);
+            const data = await response.json();
+
+            table.innerHTML = ""; // Clear old data
+
+            if (data.length === 0) {
+                table.innerHTML = "<tr><td colspan='3' class='text-center'>No vulnerabilities found yet (or scan is still running).</td></tr>";
+                return;
+            }
+
+            data.forEach(vuln => {
+                const row = `<tr>
+                    <td><span class="badge severity-${vuln.severity}">${vuln.severity}</span></td>
+                    <td>${vuln.title}</td>
+                    <td>${vuln.description}</td>
+                </tr>`;
+                table.innerHTML += row;
+            });
+        } catch (e) {
+            console.error("Error fetching findings:", e);
+            table.innerHTML = "<tr><td colspan='3' class='text-center text-danger'>Error loading results. Ensure API is running.</td></tr>";
+        }
+    }
+
+    // --- NEW FUNCTION: Download PDF Report ---
+    function downloadReport() {
+        const scanId = document.getElementById("scanIdInput").value;
+        if(!scanId) {
+            alert("Please enter a Scan ID first.");
+            return;
+        }
+        // Open the PDF endpoint in a new tab
+        window.open(`${API_URL}/scans/${scanId}/report`, '_blank');
+    }
+</script>
+
+</body>
+</html>
